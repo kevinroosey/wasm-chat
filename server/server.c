@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include "routes.c"
 
 #define PORT 8080
 // Revisit buffer size once we know more
@@ -52,13 +53,30 @@ int accept_connections(int server_fd){
     return new_socket;
 }
 
+
+
+void route_request(int socket, const char *method, const char *path) {
+    if (strcmp(path, "/login") == 0) {
+        handle_login(socket);
+    } else if (strcmp(path, "/logout") == 0) {
+        handle_logout(socket);
+    } else if (strcmp(path, "/signup") == 0) {
+        handle_signup(socket);
+    } else {
+        handle_not_found(socket);
+    }
+}
+
 void handle_client(int socket) {
     char buffer[BUFFER_SIZE] = {0};
     read(socket, buffer, BUFFER_SIZE);
     printf("Request: %s\n", buffer);
+    char method[10], path[100];
 
-    char * response = "HTTP/1.1 200 OK\nContent-Type: text/plain\n\nHello, world!";
-    write(socket, response, strlen(response));
+    sscanf(buffer, "%s %s", method, path);
+    printf("Method: %s %s\n", method, path);
+
+    route_request(socket, method, path);
 }
 
 void close_socket(int socket){
@@ -69,13 +87,11 @@ int main() {
     int server_fd = create_socket();
     bind_socket(server_fd);
     listener(server_fd);
-
     while(1) {
         int new_socket = accept_connections(server_fd);
         handle_client(new_socket);
         close_socket(new_socket);
     }
-
     return 0;
 }
 
