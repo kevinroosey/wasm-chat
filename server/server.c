@@ -7,7 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define PORT 8081
+#define PORT 8080
 // Revisit buffer size once we know more
 #define BUFFER_SIZE 1024
 
