@@ -1,97 +1,92 @@
+
+#include <microhttpd.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include "routes.c"
+#include <jwt.h>
 
-#define PORT 8080
-// Revisit buffer size once we know more
-#define BUFFER_SIZE 1024
+#define PORT 8888
+#define SECRET_KEY "your-secret-key"
 
-int create_socket() {
-    int server_fd;
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
+static enum MHD_Result request_handler(void *cls, struct MHD_Connection *connection, const char *url,
+                                       const char *method, const char *version, const char *upload_data,
+                                       size_t *upload_data_size, void **con_cls)
+{
+    if (strcmp(url, "/login") == 0 && strcmp(method, "POST") == 0)
+    {
+        // Normally, you'd validate the user credentials here
+        jwt_t *jwt;
+        char *token;
+
+        jwt_new(&jwt);
+        jwt_add_grant(jwt, "sub", "user_id");
+        jwt_set_alg(jwt, JWT_ALG_HS256, (unsigned char *)SECRET_KEY, strlen(SECRET_KEY));
+        token = jwt_encode_str(jwt);
+        jwt_free(jwt);
+
+        struct MHD_Response *response;
+        response = MHD_create_response_from_buffer(strlen(token), (void *)token, MHD_RESPMEM_MUST_FREE);
+        int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+        MHD_destroy_response(response);
+
+        return ret;
     }
-    return server_fd;
-}
+    else if (strcmp(url, "/protected") == 0 && strcmp(method, "GET") == 0)
+    {
+        const char *auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Authorization");
+        if (auth_header && strncmp(auth_header, "Bearer ", 7) == 0)
+        {
+            jwt_t *jwt;
+            const char *token = auth_header + 7;
+            if (jwt_decode(&jwt, token, (unsigned char *)SECRET_KEY, strlen(SECRET_KEY)))
+            {
+                struct MHD_Response *response;
+                const char *response_str = "Access Denied";
+                response = MHD_create_response_from_buffer(strlen(response_str), (void *)response_str, MHD_RESPMEM_PERSISTENT);
+                int ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
+                MHD_destroy_response(response);
+                return ret;
+            }
 
-
-void bind_socket(int server_fd) {
-   struct sockaddr_in address;
-   int address_len = sizeof(address);
-   address.sin_family = AF_INET;
-   address.sin_addr.s_addr = INADDR_ANY;
-   address.sin_port = htons(PORT);
-
-   if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-     perror("bind failed");
-     exit(EXIT_FAILURE);
-   }
-}
-
-void listener(int server_fd) {
-    if(listen(server_fd, 3) < 0) {
-        perror("listening");
-	exit(EXIT_FAILURE);
+            jwt_free(jwt);
+            const char *response_str = "Protected Resource";
+            struct MHD_Response *response;
+            response = MHD_create_response_from_buffer(strlen(response_str), (void *)response_str, MHD_RESPMEM_PERSISTENT);
+            int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+        else
+        {
+            struct MHD_Response *response;
+            const char *response_str = "Authorization Header Missing or Invalid";
+            response = MHD_create_response_from_buffer(strlen(response_str), (void *)response_str, MHD_RESPMEM_PERSISTENT);
+            int ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
     }
+
+    struct MHD_Response *response;
+    const char *response_str = "Not Found";
+    response = MHD_create_response_from_buffer(strlen(response_str), (void *)response_str, MHD_RESPMEM_PERSISTENT);
+    int ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+    MHD_destroy_response(response);
+
+    return ret;
 }
 
-int accept_connections(int server_fd){
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
-    int new_socket;
-    if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen))<0) {
-        perror("Cannot accept connection");
-	exit(EXIT_FAILURE);
-    }
-    return new_socket;
-}
+int main()
+{
+    struct MHD_Daemon *daemon;
 
+    daemon = MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD, PORT, NULL, NULL,
+                              &request_handler, NULL, MHD_OPTION_END);
+    if (NULL == daemon)
+        return 1;
 
+    printf("Server is running on port %d\n", PORT);
+    getchar();
 
-void route_request(int socket, const char *method, const char *path) {
-    if (strcmp(path, "/login") == 0) {
-        handle_login(socket);
-    } else if (strcmp(path, "/logout") == 0) {
-        handle_logout(socket);
-    } else if (strcmp(path, "/signup") == 0) {
-        handle_signup(socket);
-    } else {
-        handle_not_found(socket);
-    }
-}
-
-void handle_client(int socket) {
-    char buffer[BUFFER_SIZE] = {0};
-    read(socket, buffer, BUFFER_SIZE);
-    printf("Request: %s\n", buffer);
-    char method[10], path[100];
-
-    sscanf(buffer, "%s %s", method, path);
-    printf("Method: %s %s\n", method, path);
-
-    route_request(socket, method, path);
-}
-
-void close_socket(int socket){
-    close(socket);
-}
-
-int main() {
-    int server_fd = create_socket();
-    bind_socket(server_fd);
-    listener(server_fd);
-    while(1) {
-        int new_socket = accept_connections(server_fd);
-        handle_client(new_socket);
-        close_socket(new_socket);
-    }
+    MHD_stop_daemon(daemon);
     return 0;
 }
-
